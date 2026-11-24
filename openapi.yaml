@@ -1,0 +1,194 @@
+openapi: 3.1.0
+info:
+  title: Rate Limiter API
+  version: 1.0.0
+  description: Fixed-window rate limiter backed by MongoDB key-value counters.
+servers:
+  - url: http://localhost:3000
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Liveness and MongoDB connectivity check
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: MongoDB is unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/rate-limit/check:
+    post:
+      operationId: checkRateLimit
+      summary: Consume one request from a user's fixed-window allowance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckRequest'
+      responses:
+        '200':
+          description: Request allowed and counter incremented
+          headers:
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Allowance exhausted; counter was not incremented
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '503':
+          description: MongoDB is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/demo:
+    get:
+      operationId: demo
+      summary: Demo route protected by the rate-limit middleware
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Request allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Demo'
+        '400':
+          description: Missing user id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Allowance exhausted
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '503':
+          description: MongoDB is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  parameters:
+    UserId:
+      name: X-User-Id
+      in: header
+      required: true
+      description: Stable identifier of the caller
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+  headers:
+    RateLimitLimit:
+      description: Maximum requests per window
+      schema:
+        type: integer
+    RateLimitRemaining:
+      description: Requests left in the current window
+      schema:
+        type: integer
+    RateLimitReset:
+      description: Unix seconds when the current window resets
+      schema:
+        type: integer
+    RetryAfter:
+      description: Seconds until the caller may retry
+      schema:
+        type: integer
+  schemas:
+    CheckRequest:
+      type: object
+      required: [uid]
+      additionalProperties: false
+      properties:
+        uid:
+          type: string
+          minLength: 1
+          maxLength: 128
+          examples: [User101]
+    Decision:
+      type: object
+      required: [allowed, uid, limit, count, remaining, resetAt, retryAfter]
+      properties:
+        allowed:
+          type: boolean
+        uid:
+          type: string
+        limit:
+          type: integer
+        count:
+          type: integer
+          description: Consumed requests in the current window
+        remaining:
+          type: integer
+        resetAt:
+          type: string
+          format: date-time
+        retryAfter:
+          type: [integer, 'null']
+          description: Seconds until reset, null when allowed
+    Health:
+      type: object
+      required: [status, mongo]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        mongo:
+          type: string
+          enum: [connected]
+    Demo:
+      type: object
+      required: [message, rateLimit]
+      properties:
+        message:
+          type: string
+        rateLimit:
+          $ref: '#/components/schemas/Decision'
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
